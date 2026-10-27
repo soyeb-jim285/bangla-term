@@ -50,3 +50,7 @@ Prototype. Bengali only, switched on by an env var. The width rule is
 proposed upstream in [kitty#8533](https://github.com/kovidgoyal/kitty/issues/8533).
 Programs with their own width tables (Bun/Ink apps such as Claude Code, Rust
 unicode-width) still disagree.
+
+## License
+
+GPL-3.0, same as kitty. See [LICENSE](LICENSE).
