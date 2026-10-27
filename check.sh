@@ -9,5 +9,6 @@ skip() { skip=$((skip+1)); echo "SKIP $1 ($2)"; }
 [ -x "${KITTY_SRC:-}/kitty/launcher/kitty" ] &&
   run kitty-glibc env KITTY_BENGALI=glibc "$KITTY_SRC/kitty/launcher/kitty" +runpy "exec(open('kitty/glibc-test.py').read())" ||
   skip kitty-glibc "set KITTY_SRC to a patched, built kitty"
+run osc66-proxy bun claude/osc66-proxy.js --test
 [ -x "${NVIM_BIN:-}" ] && run nvim-glibc nvim/glibc-test.sh "$NVIM_BIN" || skip nvim-glibc "set NVIM_BIN to patched nvim"
 echo "$pass passed, $fail failed, $skip skipped"; [ $fail -eq 0 ]

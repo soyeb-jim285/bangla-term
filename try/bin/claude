@@ -1,0 +1,4 @@
+#!/bin/sh
+# Claude Code through a pty proxy that tells kitty the width of each Bengali
+# grapheme (OSC 66), so kitty uses the same cells Claude reserved.
+exec bun "$(dirname "$(realpath "$0")")/../../claude/osc66-proxy.js" "${BT_CLAUDE:-$HOME/.local/bin/claude}" "$@"
