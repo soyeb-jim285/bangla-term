@@ -78,7 +78,8 @@ Programs with their own width tables need a small patch to match glibc:
 | fzf / Go uniseg | glibc except U+09BE, 09D7 = 0 | `fzf/uniseg-0.4.7-bengali.patch` |
 | bat / Rust unicode-width | glibc except U+09BE, 09D7 = 0 | let the terminal wrap: `--wrap=never` |
 | tmux | glibc, unless `codepoint-widths` overrides it | do not override Bengali widths |
-| Claude Code, Ink (Bun/JS string-width) | vowel signs 0 | none; layout drifts |
+| opencode (OpenTUI) | grapheme widths | built-in `OPENTUI_FORCE_WCWIDTH=1` (set by `try/bin/opencode`) |
+| Claude Code | Bun widths, plus a native cell segmenter in its own Bun build | none possible from outside; layout drifts |
 
 ## Verification
 

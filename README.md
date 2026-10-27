@@ -18,7 +18,7 @@ Neovim and fzf need small patches. Design and per-program notes:
 | `fzf/` | patch for the uniseg library vendored into fzf |
 | `font/` | builds Bangla Term Natural (Noto Sans Bengali, scaled 1.15x, unhinted) |
 | `tools/fill_ratio.py` | shaped width vs allotted cells under each width rule |
-| `try.sh`, `try/` | opens patched kitty with wrapped nvim, tmux, fzf and bat |
+| `try.sh`, `try/` | opens patched kitty with wrapped nvim, tmux, fzf, bat and opencode |
 | `docs/demo/` | the stock vs patched comparison (`shot.sh`) |
 
 ## Try it
@@ -48,8 +48,8 @@ Checks kitty's and Neovim's widths against libc `wcswidth` on every line of
 
 Prototype. Bengali only, switched on by an env var. The width rule is
 proposed upstream in [kitty#8533](https://github.com/kovidgoyal/kitty/issues/8533).
-Programs with their own width tables (Bun/Ink apps such as Claude Code, Rust
-unicode-width) still disagree.
+Claude Code still disagrees: its layout uses a native segmenter that cannot be
+overridden from outside.
 
 ## License
 

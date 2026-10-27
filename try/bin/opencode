@@ -1,0 +1,3 @@
+#!/bin/sh
+# opencode (OpenTUI) has a built-in wcwidth mode that matches glibc for Bengali.
+OPENTUI_FORCE_WCWIDTH=1 exec "${BT_OPENCODE:-$HOME/.local/bin/opencode}" "$@"
