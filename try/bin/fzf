@@ -1,0 +1,3 @@
+#!/bin/sh
+# fzf built with fzf/uniseg-0.4.7-bengali.patch (glibc widths for া ৗ)
+exec "${BT_FZF:-$HOME/src/fzf/fzf}" "$@"

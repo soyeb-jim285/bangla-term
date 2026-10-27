@@ -1,0 +1,4 @@
+#!/bin/sh
+# System tmux on its own socket, with your config minus any Bengali
+# codepoint-widths override (glibc widths are what the terminal draws).
+exec /usr/bin/tmux -L bangla -f "$(dirname "$0")/../tmux.conf" "$@"

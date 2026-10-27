@@ -1,0 +1,311 @@
+diff --git a/kitty/char-props.c b/kitty/char-props.c
+index af5a748..34dcf06 100644
+--- a/kitty/char-props.c
++++ b/kitty/char-props.c
+@@ -7,6 +7,8 @@
+ 
+ #include "char-props.h"
+ #include "char-props-data.h"
++#include <stdlib.h>
++#include <string.h>
+ 
+ static char_type
+ ensure_char_in_range(const char_type value) {
+@@ -17,10 +19,40 @@ ensure_char_in_range(const char_type value) {
+     return value & mask;
+ }
+ 
++// Bengali characters glibc's wcwidth() gives width 1 (every assigned one except the
++// seven non-spacing marks). In "glibc" mode each of these gets its own cell, exactly
++// like zsh, bash, tmux, coreutils and less count them, so no application needs changes.
++static bool
++is_bengali_glibc_spacing(char_type ch) {
++    return ch == 0x0980 || ch == 0x0982 || ch == 0x0983 || (ch >= 0x0985 && ch <= 0x098C) ||
++           ch == 0x098F || ch == 0x0990 || (ch >= 0x0993 && ch <= 0x09A8) || (ch >= 0x09AA && ch <= 0x09B0) ||
++           ch == 0x09B2 || (ch >= 0x09B6 && ch <= 0x09B9) || (ch >= 0x09BD && ch <= 0x09C0) ||
++           ch == 0x09C7 || ch == 0x09C8 || ch == 0x09CB || ch == 0x09CC || ch == 0x09CE || ch == 0x09D7 ||
++           ch == 0x09DC || ch == 0x09DD || (ch >= 0x09DF && ch <= 0x09E1) || (ch >= 0x09E6 && ch <= 0x09FD);
++}
++
++// ponytail: opt-in via env var KITTY_BENGALI=glibc; a kitty.conf option is the upgrade path.
++bool
++bengali_mode(void) {
++    static int mode = -1;
++    if (mode < 0) {
++        const char *v = getenv("KITTY_BENGALI");
++        mode = v && strcmp(v, "glibc") == 0;
++    }
++    return mode;
++}
++
+ CharProps
+ char_props_for(char_type ch) {
+     ch = ensure_char_in_range(ch);
+-    return CharProps_t3[CharProps_t2[(CharProps_t1[ch >> CharProps_shift] << CharProps_shift) + (ch & CharProps_mask)]];
++    CharProps ans = CharProps_t3[CharProps_t2[(CharProps_t1[ch >> CharProps_shift] << CharProps_shift) + (ch & CharProps_mask)]];
++    if (UNLIKELY(ch >= 0x0980 && ch <= 0x09FE) && is_bengali_glibc_spacing(ch) && bengali_mode()) {
++        // its own 1-cell character: no spacing-mark or conjunct (GB9c) joining
++        ans.shifted_width = 1 + 4 /*=width_shift*/;
++        ans.grapheme_break = GBP_None;
++        ans.indic_conjunct_break = 0;
++    }
++    return ans;
+ }
+ 
+ void
+diff --git a/kitty/char-props.h b/kitty/char-props.h
+index a1d2174..afa8619 100644
+--- a/kitty/char-props.h
++++ b/kitty/char-props.h
+@@ -161,6 +161,7 @@ typedef enum UnicodeCategory {
+ 
+ 
+ CharProps char_props_for(char_type ch);
++bool bengali_mode(void);
+ void grapheme_segmentation_reset(GraphemeSegmentationResult *s);
+ GraphemeSegmentationResult grapheme_segmentation_step(GraphemeSegmentationResult r, CharProps ch);
+ static inline int
+diff --git a/kitty/fonts.c b/kitty/fonts.c
+index 4ac4a18..c21d9c3 100644
+--- a/kitty/fonts.c
++++ b/kitty/fonts.c
+@@ -1212,6 +1212,9 @@ static void
+ load_hb_buffer(CPUCell *first_cpu_cell, index_type num_cells, const TextCache *tc, ListOfChars *lc) {
+     size_t num = 0;
+     hb_buffer_clear_contents(harfbuzz_buffer);
++    // glibc mode autowraps between a consonant and its vowel sign; draw the
++    // orphaned sign bare instead of on a dotted circle
++    if (bengali_mode()) hb_buffer_set_flags(harfbuzz_buffer, HB_BUFFER_FLAG_DO_NOT_INSERT_DOTTED_CIRCLE);
+     // Although hb_buffer_add_codepoints is supposedly an append, we have to
+     // add all text in one call otherwise it breaks shaping, presumably because
+     // of context??
+@@ -1334,6 +1337,11 @@ render_group(
+     }
+     bool was_colored = !is_only_filled_boxes && has_emoji_presentation(cpu_cells, global_glyph_render_scratch.lc);
+     GlyphRenderInfo ri = {0};
++    // Indic runs shape wider or narrower than their cell count: squeeze runs that are too
++    // wide; left-align the rest so every word starts on its grid column.
++    const char_type first_char = global_glyph_render_scratch.lc->chars[0];
++    ri.fit_to_canvas = bengali_mode() && !was_colored && first_char >= 0x0900 && first_char <= 0x0DFF;
++    if (ri.fit_to_canvas) center_glyph = false;
+     pixel *canvas = rendering_in_smaller_area && canvas_width != scaled_canvas_width ? scratch : fg->canvas.buf;
+     if (is_only_filled_boxes) { // special case rendering of █ for tests
+         render_filled_sprite(canvas, num_glyphs, scaled_metrics, num_scaled_cells);
+@@ -1866,6 +1874,40 @@ group_normal(Font *font, hb_font_t *hbf, const TextCache *tc, ListOfChars *lc) {
+ }
+ 
+ 
++static bool
++is_bengali_cell(const CPUCell *c, const TextCache *tc) {
++    const char_type ch = cell_first_char(c, tc);
++    return ch >= 0x0980 && ch <= 0x09FF;
++}
++
++static bool
++is_bengali_group(const Group *g, const TextCache *tc) {
++    return is_bengali_cell(G(first_cpu_cell) + g->first_cell_idx, tc);
++}
++
++// HarfBuzz clusters Bengali by syllable, so a phrase arrives as many groups. Merge each
++// run of Bengali groups, including the single spaces render_line() keeps inside Bengali
++// runs, into one group, so the phrase is drawn with natural shaping and spacing and
++// fitted into its cells as a unit, instead of each syllable spaced out in its own cells.
++static void
++merge_bengali_word_groups(const TextCache *tc) {
++    if (!bengali_mode() || !G(group_idx)) return;
++    size_t out = 0;
++    for (size_t i = 1; i <= G(group_idx); i++) {
++        Group *a = G(groups) + out, *b = G(groups) + i;
++        if (a->num_cells && b->num_cells && a->num_cells + b->num_cells <= 96 &&
++            a->first_cell_idx + a->num_cells == b->first_cell_idx &&
++            a->first_glyph_idx + a->num_glyphs == b->first_glyph_idx &&
++            is_bengali_group(a, tc) &&
++            (is_bengali_group(b, tc) || cell_first_char(G(first_cpu_cell) + b->first_cell_idx, tc) == ' ')) {
++            a->num_cells += b->num_cells;
++            a->num_glyphs += b->num_glyphs;
++            a->has_special_glyph |= b->has_special_glyph;
++        } else G(groups)[++out] = *b;
++    }
++    G(group_idx) = out;
++}
++
+ static float
+ shape_run(
+     CPUCell *first_cpu_cell,
+@@ -1894,6 +1936,7 @@ shape_run(
+     shape(first_cpu_cell, first_gpu_cell, num_cells, hbf, font, disable_ligature, tc);
+     if (font->spacer_strategy == SPACERS_IOSEVKA) group_iosevka(font, hbf, tc, lc);
+     else group_normal(font, hbf, tc, lc);
++    merge_bengali_word_groups(tc);
+ #if 0
+         static char dbuf[1024];
+         // You can also generate this easily using hb-shape --show-extents --cluster-level=1 --shapers=ot /path/to/font/file text
+@@ -2230,6 +2273,14 @@ render_line(FONTS_DATA_HANDLE fg_, Line *line, index_type lnum, Cursor *cursor,
+         GPUCell *gpu_cell = line->gpu_cells + i;
+         const char_type first_ch = lc->chars[0];
+         cell_font.font_idx = font_for_cell(fg, cpu_cell, gpu_cell, &is_main_font, &is_emoji_presentation, line->text_cache, lc);
++        // glibc Bengali mode: one space between Bengali characters stays in the Bengali run,
++        // so a whole phrase is shaped (with the Bengali font's spacing) and fitted as one unit.
++        // Runs of spaces (padding, alignment) and other characters still end the run.
++        if (UNLIKELY(first_ch == ' ') && run_font.font_idx != NO_FONT && i > 0 && i + 1 < line->xnum &&
++            !cpu_cell->is_multicell && bengali_mode() &&
++            is_bengali_cell(line->cpu_cells + i - 1, line->text_cache) &&
++            is_bengali_cell(line->cpu_cells + i + 1, line->text_cache))
++            cell_font = run_font;
+         CharProps cp = char_props_for(first_ch);
+         if (cell_font.font_idx != MISSING_FONT && ((!is_main_font && !is_emoji_presentation && cp.is_symbol) ||
+                                                    (cell_font.font_idx != BOX_FONT && (is_private_use(cp))) || is_non_emoji_dingbat(first_ch, cp))) {
+diff --git a/kitty/fonts.h b/kitty/fonts.h
+index 9cea579..449c908 100644
+--- a/kitty/fonts.h
++++ b/kitty/fonts.h
+@@ -34,6 +34,8 @@ typedef struct ParsedFontFeature {
+ typedef struct GlyphRenderInfo {
+     unsigned canvas_width, rendered_width;
+     int x;
++    // input: squeeze/stretch the shaped run horizontally to exactly fill its cells
++    bool fit_to_canvas;
+ } GlyphRenderInfo;
+ 
+ ParsedFontFeature *parse_font_feature(const char *spec);
+diff --git a/kitty/freetype.c b/kitty/freetype.c
+index 3ea800d..763894d 100644
+--- a/kitty/freetype.c
++++ b/kitty/freetype.c
+@@ -9,6 +9,7 @@
+ #include "colors.h"
+ #include "cleanup.h"
+ #include "state.h"
++#include "char-props.h"
+ #include <math.h>
+ #include <structmember.h>
+ #include <ft2build.h>
+@@ -282,6 +283,9 @@ init_ft_face(Face *self, PyObject *path, int hinting, int hintstyle, long index,
+ #endif
+     self->hinting = hinting;
+     self->hintstyle = hintstyle;
++    // Bengali glyphs are assembled from marks HarfBuzz positions in unhinted units;
++    // hinting each glyph on its own snaps ra-phala, vowel signs and bowls off the headline.
++    if (bengali_mode() && FT_Get_Char_Index(self->face, 0x0995)) self->hinting = 0;
+     if (fg && !set_size_for_face((PyObject *)self, 0, false, fg)) return false;
+     self->harfbuzz_font = hb_ft_font_create(self->face, NULL);
+     if (self->harfbuzz_font == NULL) {
+@@ -1148,6 +1152,10 @@ copy_color_bitmap_argb(uint8_t *src, pixel *dest, Region *src_rect, Region *dest
+ 
+ static const bool debug_placement = false;
+ 
++// set while rendering an Indic glyph group: a glyph taller than the cell ascent
++// (ঠ, reph) is clipped instead of shifted down off the headline its neighbours share
++static bool keep_baseline = false;
++
+ static void
+ place_bitmap_in_canvas(
+     pixel *cell,
+@@ -1182,6 +1190,8 @@ place_bitmap_in_canvas(
+     int32_t yoff = (ssize_t)(y_offset + bm->bitmap_top);
+     if ((yoff > 0 && (size_t)yoff > baseline)) {
+         dest.top = 0;
++        // shaped scripts: keep every glyph on the shared baseline, clip the overshoot
++        if (keep_baseline) src.top = yoff - baseline;
+     } else {
+         dest.top = baseline - yoff;
+     }
+@@ -1199,6 +1209,28 @@ place_bitmap_in_canvas(
+ 
+ static const ProcessedBitmap EMPTY_PBM = {.factor = 1};
+ 
++// Area-average columns [src_left, src_right) of src into exactly dest_width columns of dest.
++static void
++fit_canvas_horizontally(
++    const pixel *src, unsigned src_stride, unsigned src_left, unsigned src_right, pixel *dest, unsigned dest_width, unsigned height) {
++    const float ratio = (float)(src_right - src_left) / (float)dest_width;
++    for (unsigned y = 0; y < height; y++) {
++        const pixel *srow = src + y * src_stride;
++        pixel *drow = dest + y * dest_width;
++        for (unsigned x = 0; x < dest_width; x++) {
++            const float start = src_left + x * ratio, end = start + ratio;
++            float acc[4] = {0};
++            for (unsigned sx = (unsigned)start; (float)sx < end && sx < src_right; sx++) {
++                const float w = MIN(end, sx + 1.f) - MAX(start, (float)sx);
++                for (unsigned c = 0; c < 4; c++) acc[c] += w * (float)((srow[sx] >> (8 * c)) & 0xff);
++            }
++            pixel p = 0;
++            for (unsigned c = 0; c < 4; c++) p |= (pixel)MIN(255.f, roundf(acc[c] / ratio)) << (8 * c);
++            drow[x] = p;
++        }
++    }
++}
++
+ bool
+ render_glyphs_in_cells(
+     PyObject *f,
+@@ -1222,6 +1254,33 @@ render_glyphs_in_cells(
+     ProcessedBitmap bm;
+     unsigned int canvas_width = cell_width * num_cells;
+     GlyphColorType colored;
++    // Fitting: a run wider than its cells is rendered at natural width into a scratch canvas
++    // with one cell of padding on each side (so overhanging ink is not clipped), then
++    // squeezed horizontally into the real canvas instead of being clipped.
++    pixel *out_canvas = canvas;
++    const unsigned out_width = canvas_width, pad = cell_width;
++    unsigned natural = 0;
++    float space_extra = 0;  // justification: extra advance given to each space glyph
++    if (ri->fit_to_canvas && !*was_colored) {
++        unsigned num_spaces = 0;
++        for (unsigned i = 0; i < num_glyphs; i++) {
++            natural += (unsigned)roundf((float)positions[i].x_advance / 64.0f);
++            num_spaces += info[i].codepoint == self->space_glyph_id;
++        }
++        if (natural < out_width && num_spaces) {
++            // A phrase narrower than its cells: justify it, spreading the slack over its
++            // word gaps (capped so a sparse line does not get huge gaps; the rest trails).
++            space_extra = MIN((float)(out_width - natural) / (float)num_spaces, 2.5f * (float)cell_width);
++            space_extra = floorf(space_extra);
++        }
++        if (natural > out_width) {  // narrower runs are justified above / aligned by apply_horizontal_alignment()
++            const unsigned scratch_cells = (natural + cell_width - 1) / cell_width + 2;
++            pixel *scratch = calloc((size_t)scratch_cells * cell_width * cell_height, sizeof(pixel));
++            if (scratch) {
++                canvas = scratch; num_cells = scratch_cells; canvas_width = scratch_cells * cell_width; x = (float)pad;
++            }
++        }
++    }
+     for (unsigned int i = 0; i < num_glyphs; i++) {
+         bm = EMPTY_PBM;
+         // dont load the space glyph since loading it fails for some fonts/sizes and it is anyway to be rendered as a blank
+@@ -1246,7 +1305,9 @@ render_glyphs_in_cells(
+         y = (float)positions[i].y_offset / 64.0f;
+         if (debug_placement) printf("%d: x=%f canvas: %u", i, x_offset, canvas_width);
+         if ((*was_colored || self->face->glyph->metrics.width > 0) && bm.width > 0) {
++            keep_baseline = ri->fit_to_canvas;
+             place_bitmap_in_canvas(canvas, &bm, canvas_width, cell_height, x_offset, y, baseline, i, 0xffffff, 0, 0);
++            keep_baseline = false;
+         }
+         if (debug_placement) printf(" adv: %f\n", (float)positions[i].x_advance / 64.0f);
+         // the roundf() below is needed for infinite length ligatures, for a test case
+@@ -1255,9 +1316,25 @@ render_glyphs_in_cells(
+         // if this causes issues with non-infinite ligatures, we could choose this behavior
+         // based on num_glyphs and/or num_cells
+         x += roundf((float)positions[i].x_advance / 64.0f);
++        if (info[i].codepoint == self->space_glyph_id) x += space_extra;
+         free_processed_bitmap(&bm);
+     }
+ 
++    if (canvas != out_canvas) {
++        // keep side bearings: fit [pad, pad + natural), widened to include any ink outside it
++        unsigned left = pad, right = pad + natural;
++        for (unsigned y = 0; y < cell_height; y++) {
++            const pixel *row = canvas + y * canvas_width;
++            for (unsigned cx = 0; cx < left; cx++) if (row[cx]) { left = cx; break; }
++            for (unsigned cx = canvas_width; cx > right; cx--) if (row[cx - 1]) { right = cx; break; }
++        }
++        fit_canvas_horizontally(canvas, canvas_width, left, right, out_canvas, out_width, cell_height);
++        free(canvas);
++        canvas = out_canvas;
++        canvas_width = out_width;
++        x = (float)out_width;
++    }
++
+     ri->canvas_width = canvas_width;
+     ri->rendered_width = (unsigned)x;
+     ri->x = 0;

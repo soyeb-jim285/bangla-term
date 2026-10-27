@@ -1,0 +1,21 @@
+fzf (and other Go TUIs using github.com/rivo/uniseg) count Bengali AA (U+09BE)
+and AU length mark (U+09D7) as width 0 because they are Grapheme_Extend; glibc
+and the terminal's glibc mode draw them as 1 cell. Apply to fzf's vendored copy:
+
+    go mod vendor && patch -p1 -d vendor/github.com/rivo/uniseg < THIS && go build -mod=vendor
+
+Status: built and verified in fzf 0.74.5 (docs/screenshots/v2-fzf.png).
+
+--- a/width.go
++++ b/width.go
+@@ -19,5 +19,10 @@
+ //   - Extended Pictographic: Width of 2, unless Emoji Presentation is "No".
+ func runeWidth(r rune, graphemeProperty int) int {
++	// bangla-term: Bengali AA / AU length marks are Grapheme_Extend but spacing;
++	// give them glibc's width 1 so the app agrees with libc, zsh and the terminal.
++	if r == 0x09BE || r == 0x09D7 {
++		return 1
++	}
+ 	switch graphemeProperty {
+ 	case prControl, prCR, prLF, prExtend, prZWJ:
+ 		return 0

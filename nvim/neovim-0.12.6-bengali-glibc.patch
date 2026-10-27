@@ -1,0 +1,77 @@
+diff --git a/src/nvim/mbyte.c b/src/nvim/mbyte.c
+index 4d4c299..3f93339 100644
+--- a/src/nvim/mbyte.c
++++ b/src/nvim/mbyte.c
+@@ -468,6 +468,9 @@ int utf_char2cells(int c)
+   if (n != 0) {
+     return n;
+   }
++  if (bengali_glibc_char(c)) {
++    return 1;
++  }
+ 
+   const utf8proc_property_t *prop = utf8proc_get_property(c);
+ 
+@@ -793,12 +796,41 @@ int mb_cptr2char_adv(const char **pp)
+   return c;
+ }
+ 
++/// Bengali characters glibc's wcwidth() gives width 1: everything assigned except the
++/// seven non-spacing marks.
++static bool bengali_glibc_spacing(int c)
++{
++  return c == 0x0980 || c == 0x0982 || c == 0x0983 || (c >= 0x0985 && c <= 0x098C)
++         || c == 0x098F || c == 0x0990 || (c >= 0x0993 && c <= 0x09A8)
++         || (c >= 0x09AA && c <= 0x09B0) || c == 0x09B2 || (c >= 0x09B6 && c <= 0x09B9)
++         || (c >= 0x09BD && c <= 0x09C0) || c == 0x09C7 || c == 0x09C8 || c == 0x09CB
++         || c == 0x09CC || c == 0x09CE || c == 0x09D7 || c == 0x09DC || c == 0x09DD
++         || (c >= 0x09DF && c <= 0x09E1) || (c >= 0x09E6 && c <= 0x09FD);
++}
++
++/// "glibc" Bengali mode (KITTY_BENGALI=glibc, set by a kitty built with bangla-term's
++/// patch for its children): every Bengali spacing character is its own 1-cell
++/// character, exactly as zsh, tmux and coreutils count it and the terminal draws it.
++static bool bengali_glibc_char(int c)
++{
++  static int mode = -1;
++  if (c < 0x0980 || c > 0x09FF) {
++    return false;
++  }
++  if (mode < 0) {
++    char *v = os_getenv("KITTY_BENGALI");
++    mode = v != NULL && strcmp(v, "glibc") == 0;
++    xfree(v);
++  }
++  return mode && bengali_glibc_spacing(c);
++}
++
+ /// When "c" is the first char of a string, determine if it needs to be prefixed
+ /// by a space byte to be drawn correctly, and not merge with the space left of
+ /// the string.
+ bool utf_iscomposing_first(int c)
+ {
+-  return c >= 128 && !utf8proc_grapheme_break(' ', c);
++  return c >= 128 && !utf8proc_grapheme_break(' ', c) && !bengali_glibc_char(c);
+ }
+ 
+ /// Check if the character pointed to by "p2" is a composing character when it
+@@ -830,8 +862,9 @@ bool utf_composinglike(const char *p1, const char *p2, GraphemeState *state)
+   int first = utf_ptr2char(p1);
+   int second = utf_ptr2char(p2);
+ 
++  // always step utf8proc so its state stays right, then let the Bengali rule override
+   if (!utf8proc_grapheme_break_stateful(first, second, state)) {
+-    return true;
++    return !bengali_glibc_char(second);
+   }
+ 
+   return arabic_combine(first, second);
+@@ -840,7 +873,7 @@ bool utf_composinglike(const char *p1, const char *p2, GraphemeState *state)
+ /// same as utf_composinglike but operating on UCS-4 values
+ bool utf_iscomposing(int c1, int c2, GraphemeState *state)
+ {
+-  return (!utf8proc_grapheme_break_stateful(c1, c2, state)
++  return ((!utf8proc_grapheme_break_stateful(c1, c2, state) && !bengali_glibc_char(c2))
+           || arabic_combine(c1, c2));
+ }
+ 

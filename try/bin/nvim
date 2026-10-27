@@ -1,0 +1,4 @@
+#!/bin/sh
+# Patched Neovim (glibc widths for Bengali when KITTY_BENGALI=glibc); linebreak
+# wraps long lines at spaces so words are not split across rows.
+VIMRUNTIME="$HOME/src/neovim/runtime" exec "$BT_NVIM" --cmd 'set linebreak' "$@"
