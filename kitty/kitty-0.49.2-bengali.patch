@@ -1,5 +1,5 @@
 diff --git a/kitty/char-props.c b/kitty/char-props.c
-index af5a748..34dcf06 100644
+index af5a748..7933162 100644
 --- a/kitty/char-props.c
 +++ b/kitty/char-props.c
 @@ -7,6 +7,8 @@
@@ -11,7 +11,7 @@ index af5a748..34dcf06 100644
  
  static char_type
  ensure_char_in_range(const char_type value) {
-@@ -17,10 +19,40 @@ ensure_char_in_range(const char_type value) {
+@@ -17,10 +19,48 @@ ensure_char_in_range(const char_type value) {
      return value & mask;
  }
  
@@ -38,6 +38,14 @@ index af5a748..34dcf06 100644
 +    return mode;
 +}
 +
++// Vowel signs and marks JS (Bun) counts as 0 cells but glibc as 1. After a ZWJ they
++// join the previous cell, as tmux does: bangla-term's Claude Code proxy marks them so.
++bool
++bengali_zwj_joins(char_type ch) {
++    return ch == 0x0980 || ch == 0x0982 || (ch >= 0x09BE && ch <= 0x09C0) || ch == 0x09C7 ||
++           ch == 0x09C8 || ch == 0x09CB || ch == 0x09CC || ch == 0x09D7;
++}
++
  CharProps
  char_props_for(char_type ch) {
      ch = ensure_char_in_range(ch);
@@ -54,14 +62,15 @@ index af5a748..34dcf06 100644
  
  void
 diff --git a/kitty/char-props.h b/kitty/char-props.h
-index a1d2174..afa8619 100644
+index a1d2174..a157f36 100644
 --- a/kitty/char-props.h
 +++ b/kitty/char-props.h
-@@ -161,6 +161,7 @@ typedef enum UnicodeCategory {
+@@ -161,6 +161,8 @@ typedef enum UnicodeCategory {
  
  
  CharProps char_props_for(char_type ch);
 +bool bengali_mode(void);
++bool bengali_zwj_joins(char_type ch);
  void grapheme_segmentation_reset(GraphemeSegmentationResult *s);
  GraphemeSegmentationResult grapheme_segmentation_step(GraphemeSegmentationResult r, CharProps ch);
  static inline int
@@ -309,3 +318,18 @@ index 3ea800d..763894d 100644
      ri->canvas_width = canvas_width;
      ri->rendered_width = (unsigned)x;
      ri->x = 0;
+diff --git a/kitty/screen.c b/kitty/screen.c
+index 6010c35..39c4aeb 100644
+--- a/kitty/screen.c
++++ b/kitty/screen.c
+@@ -1412,8 +1412,9 @@ draw_text_loop(Screen *self, const uint32_t *chars, size_t num_chars, text_loop_
+                 if (ch < ' ') draw_control_char(self, s, ch);
+                 continue;
+             }
++            const bool after_zwj = s->seg.grapheme_break == GBP_ZWJ;
+             s->seg = grapheme_segmentation_step(s->seg, cp);
+-            if (UNLIKELY(s->seg.add_to_current_cell && s->prev.cc)) {
++            if (UNLIKELY((s->seg.add_to_current_cell || (after_zwj && bengali_zwj_joins(ch) && bengali_mode())) && s->prev.cc)) {
+                 draw_combining_char(self, s, ch);
+                 continue;
+             }

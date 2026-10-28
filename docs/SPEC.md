@@ -79,7 +79,7 @@ Programs with their own width tables need a small patch to match glibc:
 | bat / Rust unicode-width | glibc except U+09BE, 09D7 = 0 | let the terminal wrap: `--wrap=never` |
 | tmux | glibc, unless `codepoint-widths` overrides it | do not override Bengali widths |
 | opencode (OpenTUI) | grapheme widths | built-in `OPENTUI_FORCE_WCWIDTH=1` (set by `try/bin/opencode`) |
-| Claude Code | Bun widths, plus a native cell segmenter in its own Bun build | `claude/osc66-proxy.js` wraps each grapheme in kitty's `OSC 66 ; w=<Bun width>` so kitty uses the cells Claude reserved (squeezed, but intact) |
+| Claude Code | Bun widths, plus a native cell segmenter in its own Bun build | `claude/osc66-proxy.js` wraps each grapheme in kitty's `OSC 66 ; w=<Bun width>` so kitty uses the cells Claude reserved (squeezed, but intact); under tmux, which drops OSC 66, it puts a ZWJ before each vowel sign Bun counts as 0, which tmux and patched kitty join into the previous cell |
 
 ## Verification
 

@@ -1,5 +1,6 @@
 // Run a Bun TUI (Claude Code) in a pty and tell kitty how wide its Bengali is.
 //   bun osc66-proxy.js claude [args...]
+// Under tmux it marks Bun-zero-width vowel signs with ZWJ instead (see zwj).
 // Claude Code lays text out with Bun.stringWidth, which counts Bengali vowel
 // signs as 0 (বিজ্ঞান = 4 cells, libc says 6). Instead of changing the app,
 // wrap every Bengali grapheme it prints in kitty's text-sizing escape
@@ -9,7 +10,14 @@ const BN = /[ঀ-৿]/;
 const RUN = /[ঀ-৿‌‍]+/g;
 const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
-const wrap = (text) =>
+// Bun counts these 0 cells, glibc (tmux, kitty) 1. tmux cannot pass OSC 66, so
+// under tmux put a ZWJ before each: tmux then joins it into the previous cell,
+// and patched kitty (glibc mode) does the same. Bun widths are glibc widths
+// with exactly these zeroed (checked on docs/bengali-test.txt).
+const BUN_ZERO = /[\u0980\u0982\u09BE-\u09C0\u09C7\u09C8\u09CB\u09CC\u09D7]/g;
+const zwj = (text) => text.replace(BUN_ZERO, '\u200D$&');
+
+const osc66 = (text) =>
   text.replace(RUN, (run) => {
     let out = '';
     for (const { segment: g } of seg.segment(run)) {
@@ -19,6 +27,7 @@ const wrap = (text) =>
     }
     return out;
   });
+const wrap = process.env.TMUX && process.argv[2] !== '--test' ? zwj : osc66;
 
 // Split output into escape sequences (passed through untouched) and text.
 // Returns [transformed, leftover]: an unfinished escape or a trailing Bengali
@@ -49,6 +58,7 @@ if (process.argv[2] === '--test') {
   eq(transform('\x1b]0;বাংলা\x07ok'), ['\x1b]0;বাংলা\x07ok', '']); // OSC payload untouched
   eq(transform('ab\x1b[3'), ['ab', '\x1b[3']); // unfinished escape held back
   eq(transform('x ক'), ['x ', 'ক']); // trailing grapheme may continue
+  eq(zwj('কিং বা'), 'ক\u200Dি\u200Dং ব\u200Dা');
   console.log('osc66-proxy ok');
   process.exit(0);
 }

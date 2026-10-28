@@ -50,7 +50,7 @@ Checks kitty's and Neovim's widths against libc `wcswidth` on every line of
 Prototype. Bengali only, switched on by an env var. The width rule is
 proposed upstream in [kitty#8533](https://github.com/kovidgoyal/kitty/issues/8533).
 Claude Code lays Bengali out narrower (Bun widths); the proxy keeps it intact
-but squeezed, and only works in kitty outside tmux.
+but squeezed, in kitty directly (OSC 66) and inside tmux (ZWJ marks).
 
 ## License
 
